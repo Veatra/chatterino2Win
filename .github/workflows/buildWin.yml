@@ -160,29 +160,28 @@ jobs:
 
       - name: Conan install (Windows)
         if: matrix.os == 'windows-latest'
-        run: |
-          mkdir build && cd build
-          conan install .. \
-            -s build_type=RelWithDebInfo \
-            -c tools.cmake.cmaketoolchain:generator="NMake Makefiles" \
-            -o with_openssl3=False \
-            --output-folder=.
+       run: |
+         mkdir build && cd build
+         conan install .. \
+           -s build_type=RelWithDebInfo \
+           -c tools.cmake.cmaketoolchain:generator="NMake Makefiles" \
+           -o openssl:with_openssl3=False \
+           --build=openssl/* \
+           --build=missing \
+           --output-folder=.
         shell: bash
 
       # --- Configure & Build ---
       - name: Configure & build
-        run: |
-          cd build || mkdir build && cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUSE_PRECOMPILED_HEADERS=OFF \
-            -DCHATTERINO_LTO="$C2_ENABLE_LTO" \
-            -DCHATTERINO_PLUGINS="$C2_PLUGINS" \
-            -DBUILD_WITH_QT6=Off \
-            -DBUILD_WITH_QT5=On \
-            -DCMAKE_PREFIX_PATH="$Qt5_DIR/lib/cmake" \
-            $( [[ "${{ matrix.os }}" == "windows-latest" ]] && echo '-G "NMake Makefiles"' )
-          $( [[ "${{ matrix.os }}" == "windows-latest" ]] && echo 'nmake /S /NOLOGO' || echo 'cmake --build . --config Release' )
+       run: |
+         cd build
+         cmake .. -G "NMake Makefiles" \
+           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+           -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake \
+           -DUSE_PRECOMPILED_HEADERS=ON \
+           -DBUILD_WITH_QT6=Off \
+           -DBUILD_WITH_QT5=On
+         nmake /S /NOLOGO
         shell: bash
 
       # --- Bundle & Package ---
