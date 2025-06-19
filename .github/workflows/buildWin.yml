@@ -1,4 +1,4 @@
-name: buildWin
+name: Nightly Qt5 build
 
 # Run nightly at 00:00 UTC (02:00 CEST) + manual trigger
 on:
@@ -11,12 +11,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CONAN_VERSION: 2.11.0
   # disable Qt6, enable Qt5
   C2_BUILD_WITH_QT6: Off
-  # upstream uses C2_BUILD_WITH_QT6=Off to force Qt5
+  CONAN_VERSION: 2.11.0
   CHATTERINO_REQUIRE_CLEAN_GIT: On
 
+################################################################
+# Ubuntu in Docker (Qt 5.12.5)
+################################################################
 jobs:
   build-ubuntu-docker:
     name: Build Ubuntu Docker (Qt 5.12.5)
@@ -48,10 +50,9 @@ jobs:
       - name: Fix git permission error
         run: git config --global --add safe.directory '*'
 
-      - name: Build in Docker
+      - name: Build inside Docker
         run: |
           mkdir build && cd build
-          # mirror upstream CMake options
           CXXFLAGS=-fno-sized-deallocation cmake \
             -DCMAKE_INSTALL_PREFIX=appdir/usr/ \
             -DCMAKE_BUILD_TYPE=Release \
@@ -63,14 +64,13 @@ jobs:
             -DBUILD_WITH_QT6=Off \
             -DCMAKE_PREFIX_PATH="$Qt5_DIR/lib/cmake" \
             -DCHATTERINO_STATIC_QT_BUILD=On \
-            -DFORCE_JSON_GENERATION=${{ matrix.os == 'ubuntu-20.04' && 'On' || 'Off'}} \
+            -DFORCE_JSON_GENERATION=Off \
             ..
           make -j"$(nproc)"
 
       - name: Package AppImage (if enabled)
         if: matrix.build-appimage
-        run: |
-          cd build && sh ../.CI/CreateAppImage.sh
+        run: cd build && sh ../.CI/CreateAppImage.sh
 
       - name: Upload AppImage
         if: matrix.build-appimage
@@ -81,8 +81,7 @@ jobs:
 
       - name: Package .deb (if enabled)
         if: matrix.build-deb
-        run: |
-          cd build && sh ../.CI/CreateUbuntuDeb.sh
+        run: cd build && sh ../.CI/CreateUbuntuDeb.sh
 
       - name: Upload .deb
         if: matrix.build-deb
@@ -91,19 +90,22 @@ jobs:
           name: Chatterino-ubuntu-20.04-Qt-${{ matrix.qt-version }}.deb
           path: build/Chatterino-ubuntu-20.04-x86_64.deb
 
+################################################################
+# macOS & Windows (Qt 5.12.5)
+################################################################
   build:
-    name: Build ${{ matrix.os }} with Qt ${{ matrix.qt-version }}
+    name: Build ${{ matrix.os }} (Qt ${{ matrix.qt-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          # macOS + Windows Qt5
           - os: macos-13
             qt-version: 5.12.5
             force-lto: false
             plugins: true
             skip-crashpad: true
             skip-artifact: false
+
           - os: windows-latest
             qt-version: 5.12.5
             force-lto: false
@@ -115,7 +117,6 @@ jobs:
       C2_ENABLE_LTO: ${{ matrix.force-lto }}
       C2_PLUGINS: ${{ matrix.plugins }}
       C2_ENABLE_CRASHPAD: ${{ matrix.skip-crashpad == false }}
-      # ensures Qt6 stays off
       C2_BUILD_WITH_QT6: Off
 
     steps:
@@ -124,56 +125,95 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      # --- Common: Install Qt5 ---
       - name: Install Qt5
         uses: jurplel/install-qt-action@v4.1.1
         with:
           cache: true
           version: ${{ matrix.qt-version }}
 
-      - name: Install native deps
+      # --- macOS specific deps ---
+      - name: Install native deps (macOS)
+        if: matrix.os == 'macos-13'
         run: |
-          if [[ "$(uname)" == "Darwin" ]]; then
-            brew install openssl cmake boost p7zip create-dmg
-          fi
+          brew install openssl cmake boost p7zip create-dmg
         shell: bash
 
-      - name: Configure & Build
+      # --- Windows specific setup ---
+      - name: Enable MSVC Dev Cmd (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+
+      - name: Install sccache (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: hendrikmuhs/ccache-action@v1.2.16
+
+      - name: Install Conan (Windows)
+        if: matrix.os == 'windows-latest'
+        run: pip install conan==${{ env.CONAN_VERSION }}
+        shell: bash
+
+      - name: Conan install (Windows)
+        if: matrix.os == 'windows-latest'
         run: |
           mkdir build && cd build
+          conan install .. \
+            -s build_type=RelWithDebInfo \
+            -c tools.cmake.cmaketoolchain:generator="NMake Makefiles" \
+            -o with_openssl3=False \
+            --output-folder=.
+        shell: bash
+
+      # --- Configure & Build ---
+      - name: Configure & build
+        run: |
+          cd build || mkdir build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
             -DUSE_PRECOMPILED_HEADERS=OFF \
             -DCHATTERINO_LTO="$C2_ENABLE_LTO" \
             -DCHATTERINO_PLUGINS="$C2_PLUGINS" \
             -DBUILD_WITH_QT6=Off \
             -DBUILD_WITH_QT5=On \
-            -DCMAKE_PREFIX_PATH="$Qt5_DIR/lib/cmake"
-          cmake --build . --config Release
+            -DCMAKE_PREFIX_PATH="$Qt5_DIR/lib/cmake" \
+            $( [[ "${{ matrix.os }}" == "windows-latest" ]] && echo '-G "NMake Makefiles"' )
+          $( [[ "${{ matrix.os }}" == "windows-latest" ]] && echo 'nmake /S /NOLOGO' || echo 'cmake --build . --config Release' )
         shell: bash
 
-      - name: Package & Upload
+      # --- Bundle & Package ---
+      - name: Bundle & package
         run: |
           cd build
-          # ZIP for all, DMG for macOS
-          if [[ "$(uname)" == "Darwin" ]]; then
+          if [[ "${{ matrix.os }}" == "macos-13" ]]; then
             sh ../.CI/CreateDMG.sh
-            actions/upload-artifact@v4 --name chatterino-macos-Qt-${{ matrix.qt-version }}.dmg --path chatterino-macos-Qt-${{ matrix.qt-version }}.dmg
+            echo "Uploading DMG..."
+            gh run upload --name chatterino-macos-Qt-${{ matrix.qt-version }}.dmg --path chatterino-macos-Qt-${{ matrix.qt-version }}.dmg
           else
-            zip -r chatterino-windows-x86-64-Qt-${{ matrix.qt-version }}.zip Chatterino2/
-            actions/upload-artifact@v4 --name chatterino-windows-x86-64-Qt-${{ matrix.qt-version }}.zip --path chatterino-windows-x86-64-Qt-${{ matrix.qt-version }}.zip
+            # Windows: deploy Qt DLLs, copy exe
+            windeployqt bin/chatterino.exe --release --no-translations --dir Chatterino2/
+            copy bin\chatterino.exe Chatterino2\
+            7z a chatterino-windows-x86-64-Qt-${{ matrix.qt-version }}.zip Chatterino2
+            echo "Uploading ZIP..."
+            gh run upload --name chatterino-windows-x86-64-Qt-${{ matrix.qt-version }}.zip --path chatterino-windows-x86-64-Qt-${{ matrix.qt-version }}.zip
           fi
         shell: bash
 
+################################################################
+# Create Nightly Release
+################################################################
   create-release:
+    name: Create nightly GitHub Release
     needs: [build-ubuntu-docker, build]
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
+
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
           path: release-artifacts
           name: '*'
+
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1.15.0
         with:
