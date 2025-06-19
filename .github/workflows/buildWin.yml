@@ -99,13 +99,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-13
-            qt-version: 5.12.5
-            force-lto: false
-            plugins: true
-            skip-crashpad: true
-            skip-artifact: false
-
           - os: windows-latest
             qt-version: 5.12.5
             force-lto: false
@@ -131,13 +124,6 @@ jobs:
         with:
           cache: true
           version: ${{ matrix.qt-version }}
-
-      # --- macOS specific deps ---
-      - name: Install native deps (macOS)
-        if: matrix.os == 'macos-13'
-        run: |
-          brew install openssl cmake boost p7zip create-dmg
-        shell: bash
 
       # --- Windows specific setup ---
       - name: Enable MSVC Dev Cmd (Windows)
@@ -165,7 +151,7 @@ jobs:
           conan install .. \
           -s build_type=RelWithDebInfo \
           -c tools.cmake.cmaketoolchain:generator="NMake Makefiles" \
-          -o openssl:with_openssl3=False \
+          -o openssl/*:with_openssl3=False \
           --build=openssl/* \
           --build=missing \
           --output-folder=.
