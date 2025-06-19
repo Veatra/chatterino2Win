@@ -1,4 +1,4 @@
-name: Nightly Qt5 build
+name: buildW
 
 # Run nightly at 00:00 UTC (02:00 CEST) + manual trigger
 on:
